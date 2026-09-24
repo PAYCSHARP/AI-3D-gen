@@ -1,5 +1,6 @@
 {
   "space_id": "tencent/Hunyuan3D-2.1",
+  "texture_space_id": "PAYCSHARP/Hunyuan3D-2.1",
   "hf_token": "",
   "remove_background": true,
   "timeout_s": 900,
