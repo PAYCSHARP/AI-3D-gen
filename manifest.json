@@ -1,0 +1,64 @@
+{
+  "id": "hunyuan3d21-cloud",
+  "name": "Hunyuan3D 2.1 Cloud (HF Space)",
+  "type": "model",
+  "source": "https://github.com/YOUR_GITHUB/modly-hunyuan3d21-cloud",
+  "description": "Hunyuan3D 2.1 s PBR texturami. Nepočítá lokálně – posílá fotku do Hugging Face Space (ZeroGPU).",
+  "version": "0.1.0",
+  "author": "Ladislav",
+  "generator_class": "Hunyuan3D21CloudGenerator",
+  "tags": ["image-to-3d", "texture", "cloud", "no-gpu"],
+  "nodes": [
+    {
+      "id": "generate",
+      "name": "Generate Mesh (cloud)",
+      "input": "image",
+      "output": "mesh",
+      "params_schema": [
+        {
+          "id": "num_inference_steps",
+          "label": "Quality",
+          "type": "select",
+          "default": 30,
+          "options": [
+            { "value": 20, "label": "Fast" },
+            { "value": 30, "label": "Balanced" },
+            { "value": 50, "label": "High" }
+          ],
+          "tooltip": "Počet difuzních kroků."
+        },
+        {
+          "id": "octree_resolution",
+          "label": "Mesh Resolution",
+          "type": "select",
+          "default": 256,
+          "options": [
+            { "value": 256, "label": "Low" },
+            { "value": 380, "label": "Medium" },
+            { "value": 512, "label": "High" }
+          ],
+          "tooltip": "Rozlišení sítě."
+        },
+        {
+          "id": "guidance_scale",
+          "label": "Guidance Scale",
+          "type": "float",
+          "default": 5.0,
+          "min": 1.0,
+          "max": 10.0,
+          "step": 0.5,
+          "tooltip": "Vyšší = věrnější vstupní fotce."
+        },
+        {
+          "id": "seed",
+          "label": "Seed",
+          "type": "int",
+          "default": -1,
+          "min": -1,
+          "max": 10000000,
+          "tooltip": "-1 = náhodný seed."
+        }
+      ]
+    }
+  ]
+}

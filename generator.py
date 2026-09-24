@@ -1,0 +1,200 @@
+"""
+Hunyuan3D 2.1 Cloud – Modly extension.
+Negeneruje lokálně: fotku pošle do Hugging Face Space (Gradio API, endpoint generation_all)
+a stáhne hotový texturovaný GLB (PBR). Nastavení v config.json vedle tohoto souboru.
+"""
+import io
+import json
+import os
+import random
+import shutil
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Callable, Optional
+
+from PIL import Image
+
+from services.generators.base import BaseGenerator, smooth_progress, GenerationCancelled
+
+_EXT_DIR = Path(__file__).resolve().parent
+_DEFAULTS = {
+    "space_id": "tencent/Hunyuan3D-2.1",
+    "hf_token": "",
+    "remove_background": True,
+    "timeout_s": 900,
+}
+MAX_SEED = 10_000_000
+
+
+def _load_config() -> dict:
+    cfg = dict(_DEFAULTS)
+    try:
+        cfg.update(json.loads((_EXT_DIR / "config.json").read_text(encoding="utf-8")))
+    except Exception as exc:
+        print(f"[Hunyuan3D21Cloud] config.json nelze načíst ({exc}), používám výchozí.")
+    token = os.environ.get("HF_TOKEN")
+    if token and not cfg.get("hf_token"):
+        cfg["hf_token"] = token
+    return cfg
+
+
+class Hunyuan3D21CloudGenerator(BaseGenerator):
+    MODEL_ID = "hunyuan3d21-cloud"
+    DISPLAY_NAME = "Hunyuan3D 2.1 Cloud (HF Space)"
+    VRAM_GB = 0
+
+    # ---------------------------------------------------------------- #
+    # Lifecycle – nic se nestahuje, "model" je jen klient na Space
+    # ---------------------------------------------------------------- #
+    def is_downloaded(self) -> bool:
+        return True
+
+    def load(self) -> None:
+        if self._model is not None:
+            return
+        from gradio_client import Client
+
+        cfg = _load_config()
+        token = cfg.get("hf_token") or None
+        print(f"[Hunyuan3D21Cloud] Připojuji se ke Space {cfg['space_id']} …")
+        try:
+            client = Client(cfg["space_id"], hf_token=token)
+        except TypeError:  # novější gradio_client používá 'token'
+            client = Client(cfg["space_id"], token=token)
+        self._cfg = cfg
+        self._api_name = self._find_endpoint(client)
+        self._model = client
+        print(f"[Hunyuan3D21Cloud] Připojeno, endpoint {self._api_name}.")
+
+    def unload(self) -> None:
+        super().unload()
+
+    # ---------------------------------------------------------------- #
+    # Inference
+    # ---------------------------------------------------------------- #
+    def generate(
+        self,
+        image_bytes: bytes,
+        params: dict,
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Path:
+        from gradio_client import handle_file
+
+        if self._model is None:
+            self.load()
+
+        steps = int(params.get("num_inference_steps", 30))
+        octree = int(params.get("octree_resolution", 256))
+        guidance = float(params.get("guidance_scale", 5.0))
+        seed = int(params.get("seed", -1))
+        randomize = seed < 0
+        if randomize:
+            seed = random.randint(0, MAX_SEED)
+
+        self._report(progress_cb, 3, "Připravuji obrázek…")
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        Image.open(io.BytesIO(image_bytes)).convert("RGBA").save(tmp.name)
+
+        self._report(progress_cb, 8, "Odesílám do Hugging Face Space (fronta)…")
+        stop_evt = threading.Event()
+        if progress_cb:
+            threading.Thread(
+                target=smooth_progress,
+                args=(progress_cb, 10, 90, "Generuji tvar + PBR textury v cloudu…", stop_evt),
+                daemon=True,
+            ).start()
+
+        try:
+            job = self._model.submit(
+                None,                      # caption
+                handle_file(tmp.name),     # image
+                None, None, None, None,    # mv_image_front/back/left/right
+                steps,
+                guidance,
+                seed,
+                octree,
+                bool(self._cfg.get("remove_background", True)),
+                8000,                      # num_chunks
+                randomize,
+                api_name=self._api_name,
+            )
+            deadline = time.time() + float(self._cfg.get("timeout_s", 900))
+            while not job.done():
+                if cancel_event is not None and cancel_event.is_set():
+                    try:
+                        job.cancel()
+                    finally:
+                        raise GenerationCancelled()
+                if time.time() > deadline:
+                    job.cancel()
+                    raise RuntimeError("Vypršel časový limit čekání na Hugging Face Space.")
+                time.sleep(1.0)
+            result = job.result()
+        except GenerationCancelled:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "Hugging Face Space vrátil chybu. Časté příčiny: Space je pozastavený (Paused), "
+                "vyčerpaná denní ZeroGPU kvóta, nebo změněné API.\n"
+                f"Space: {self._cfg.get('space_id')}\nPůvodní chyba: {exc}"
+            ) from exc
+        finally:
+            stop_evt.set()
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+        glb_src = self._pick_glb(result)
+        self._report(progress_cb, 95, "Ukládám GLB…")
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        out = self.outputs_dir / f"{int(time.time())}_{uuid.uuid4().hex[:8]}.glb"
+        shutil.copyfile(glb_src, out)
+        self._report(progress_cb, 100, "Hotovo")
+        return out
+
+    # ---------------------------------------------------------------- #
+    # Helpers
+    # ---------------------------------------------------------------- #
+    @staticmethod
+    def _find_endpoint(client) -> str:
+        """Najde endpoint pro 'Gen Textured Shape' (generation_all)."""
+        try:
+            info = client.view_api(print_info=False, return_format="dict")
+            names = list((info or {}).get("named_endpoints", {}).keys())
+        except Exception:
+            names = []
+        for n in names:
+            if "generation_all" in n:
+                return n
+        if names:
+            print(f"[Hunyuan3D21Cloud] Endpoint generation_all nenalezen, dostupné: {names}")
+        return "/generation_all"
+
+    @staticmethod
+    def _pick_glb(result) -> str:
+        """Z výstupu generation_all vybere texturovaný GLB (2. výstup), jinak jakýkoli .glb."""
+        items = list(result) if isinstance(result, (list, tuple)) else [result]
+
+        def as_path(x):
+            if isinstance(x, dict):
+                x = x.get("value") or x.get("path") or x.get("name")
+            return x if isinstance(x, str) and os.path.exists(x) else None
+
+        if len(items) > 1 and as_path(items[1]) and as_path(items[1]).lower().endswith(".glb"):
+            return as_path(items[1])
+        for x in items:
+            p = as_path(x)
+            if p and p.lower().endswith(".glb"):
+                return p
+        raise RuntimeError(f"Ve výstupu Space nebyl nalezen GLB soubor: {result!r}")
+
+    @classmethod
+    def params_schema(cls) -> list:
+        manifest = json.loads((_EXT_DIR / "manifest.json").read_text(encoding="utf-8"))
+        return manifest["nodes"][0]["params_schema"]
