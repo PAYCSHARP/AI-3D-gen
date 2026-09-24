@@ -2,5 +2,6 @@
   "space_id": "tencent/Hunyuan3D-2.1",
   "hf_token": "",
   "remove_background": true,
-  "timeout_s": 900
+  "timeout_s": 900,
+  "mode": "auto"
 }
