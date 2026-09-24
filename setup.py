@@ -1,7 +1,7 @@
 """
 Hunyuan3D 2.1 Cloud — extension setup script.
-Modly volá:  python setup.py <json_args>  (nebo pozičně, viz oficiální rozšíření).
-Vytvoří venv a nainstaluje jen lehké závislosti (žádný torch, žádná GPU).
+Modly volá: python setup.py <json_args>
+Vytvoří venv a nainstaluje jen lehké závislosti (bez torch/GPU).
 """
 import json
 import platform
@@ -10,10 +10,10 @@ import sys
 from pathlib import Path
 
 
-def pip(venv: Path, *args: str) -> None:
+def run_pip(venv: Path, *args: str) -> None:
     is_win = platform.system() == "Windows"
-    pip_exe = venv / ("Scripts/pip.exe" if is_win else "bin/pip")
-    subprocess.run([str(pip_exe), *args], check=True)
+    py = venv / ("Scripts/python.exe" if is_win else "bin/python")
+    subprocess.run([str(py), "-m", "pip", *args], check=True)
 
 
 def setup(python_exe: str, ext_dir: Path, **_ignored) -> None:
@@ -21,8 +21,8 @@ def setup(python_exe: str, ext_dir: Path, **_ignored) -> None:
     print(f"[setup] Creating venv at {venv} …")
     subprocess.run([python_exe, "-m", "venv", str(venv)], check=True)
     print("[setup] Installing dependencies …")
-    pip(venv, "install", "--upgrade", "pip")
-    pip(venv, "install", "gradio_client", "huggingface_hub", "Pillow", "numpy", "trimesh")
+    run_pip(venv, "install", "gradio_client", "huggingface_hub",
+            "Pillow", "numpy", "trimesh")
     print("[setup] Done. Venv ready at:", venv)
 
 
