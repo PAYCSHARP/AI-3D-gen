@@ -25,6 +25,7 @@ _DEFAULTS = {
     "hf_token": "",
     "remove_background": True,
     "timeout_s": 900,
+    "mode": "auto",   # "auto" = textury, při odmítnutí jen tvar | "textured" | "shape"
 }
 MAX_SEED = 10_000_000
 
@@ -65,9 +66,10 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
         except TypeError:  # novější gradio_client používá 'token'
             client = Client(cfg["space_id"], token=token)
         self._cfg = cfg
-        self._api_name = self._find_endpoint(client)
+        self._api_textured = self._find_endpoint(client, "generation_all")
+        self._api_shape = self._find_endpoint(client, "shape_generation")
         self._model = client
-        print(f"[Hunyuan3D21Cloud] Připojeno, endpoint {self._api_name}.")
+        print(f"[Hunyuan3D21Cloud] Připojeno: {self._api_textured} | {self._api_shape}")
 
     def unload(self) -> None:
         super().unload()
@@ -109,40 +111,22 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
                 daemon=True,
             ).start()
 
+        mode = str(self._cfg.get("mode", "auto")).lower()
+        args = (steps, guidance, seed, octree,
+                bool(self._cfg.get("remove_background", True)), 8000, randomize)
         try:
-            job = self._model.submit(
-                None,                      # caption
-                handle_file(tmp.name),     # image
-                None, None, None, None,    # mv_image_front/back/left/right
-                steps,
-                guidance,
-                seed,
-                octree,
-                bool(self._cfg.get("remove_background", True)),
-                8000,                      # num_chunks
-                randomize,
-                api_name=self._api_name,
-            )
-            deadline = time.time() + float(self._cfg.get("timeout_s", 900))
-            while not job.done():
-                if cancel_event is not None and cancel_event.is_set():
-                    try:
-                        job.cancel()
-                    finally:
-                        raise GenerationCancelled()
-                if time.time() > deadline:
-                    job.cancel()
-                    raise RuntimeError("Vypršel časový limit čekání na Hugging Face Space.")
-                time.sleep(1.0)
-            result = job.result()
-        except GenerationCancelled:
-            raise
-        except Exception as exc:
-            raise RuntimeError(
-                "Hugging Face Space vrátil chybu. Časté příčiny: Space je pozastavený (Paused), "
-                "vyčerpaná denní ZeroGPU kvóta, nebo změněné API.\n"
-                f"Space: {self._cfg.get('space_id')}\nPůvodní chyba: {exc}"
-            ) from exc
+            if mode == "shape":
+                result = self._run_job(self._api_shape, tmp.name, args, cancel_event)
+            else:
+                try:
+                    result = self._run_job(self._api_textured, tmp.name, args, cancel_event)
+                except RuntimeError as exc:
+                    if mode == "auto" and "duration" in str(exc).lower():
+                        print("[Hunyuan3D21Cloud] Textury odmítnuty (limit GPU času) -> generuji jen tvar.")
+                        self._report(progress_cb, 50, "Limit GPU: generuji jen tvar (bez textur)…")
+                        result = self._run_job(self._api_shape, tmp.name, args, cancel_event)
+                    else:
+                        raise
         finally:
             stop_evt.set()
             try:
@@ -161,20 +145,50 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
     # ---------------------------------------------------------------- #
     # Helpers
     # ---------------------------------------------------------------- #
+    def _run_job(self, api_name, img_path, args, cancel_event):
+        from gradio_client import handle_file
+        try:
+            job = self._model.submit(
+                None,                      # caption
+                handle_file(img_path),     # image
+                None, None, None, None,    # mv_image_front/back/left/right
+                *args,
+                api_name=api_name,
+            )
+            deadline = time.time() + float(self._cfg.get("timeout_s", 900))
+            while not job.done():
+                if cancel_event is not None and cancel_event.is_set():
+                    try:
+                        job.cancel()
+                    finally:
+                        raise GenerationCancelled()
+                if time.time() > deadline:
+                    job.cancel()
+                    raise RuntimeError("Vypršel časový limit čekání na Hugging Face Space.")
+                time.sleep(1.0)
+            return job.result()
+        except GenerationCancelled:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f"Hugging Face Space vrátil chybu ({api_name}). Časté příčiny: Space je pozastavený, "
+                "vyčerpaná denní ZeroGPU kvóta, limit délky GPU úlohy, nebo změněné API.\n"
+                f"Space: {self._cfg.get('space_id')}\nPůvodní chyba: {exc}"
+            ) from exc
+
     @staticmethod
-    def _find_endpoint(client) -> str:
-        """Najde endpoint pro 'Gen Textured Shape' (generation_all)."""
+    def _find_endpoint(client, fn_name: str) -> str:
         try:
             info = client.view_api(print_info=False, return_format="dict")
             names = list((info or {}).get("named_endpoints", {}).keys())
         except Exception:
             names = []
         for n in names:
-            if "generation_all" in n:
+            if fn_name in n:
                 return n
         if names:
-            print(f"[Hunyuan3D21Cloud] Endpoint generation_all nenalezen, dostupné: {names}")
-        return "/generation_all"
+            print(f"[Hunyuan3D21Cloud] Endpoint {fn_name} nenalezen, dostupné: {names}")
+        return "/" + fn_name
 
     @staticmethod
     def _pick_glb(result) -> str:
