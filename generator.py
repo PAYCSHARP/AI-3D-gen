@@ -66,6 +66,11 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
         except TypeError:  # novější gradio_client používá 'token'
             client = Client(cfg["space_id"], token=token)
         self._cfg = cfg
+        try:
+            self._api_info = client.view_api(print_info=False, return_format="dict") or {}
+        except Exception as exc:
+            print(f"[Hunyuan3D21Cloud] view_api selhalo: {exc}")
+            self._api_info = {}
         self._api_textured = self._find_endpoint(client, "generation_all")
         self._api_shape = self._find_endpoint(client, "shape_generation")
         self._model = client
@@ -112,8 +117,15 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
             ).start()
 
         mode = str(self._cfg.get("mode", "auto")).lower()
-        args = (steps, guidance, seed, octree,
-                bool(self._cfg.get("remove_background", True)), 8000, randomize)
+        args = {
+            "steps": steps,
+            "guidance_scale": guidance,
+            "seed": seed,
+            "octree_resolution": octree,
+            "check_box_rembg": bool(self._cfg.get("remove_background", True)),
+            "num_chunks": 8000,
+            "randomize_seed": randomize,
+        }
         try:
             if mode == "shape":
                 result = self._run_job(self._api_shape, tmp.name, args, cancel_event)
@@ -148,13 +160,8 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
     def _run_job(self, api_name, img_path, args, cancel_event):
         from gradio_client import handle_file
         try:
-            job = self._model.submit(
-                None,                      # caption
-                handle_file(img_path),     # image
-                None, None, None, None,    # mv_image_front/back/left/right
-                *args,
-                api_name=api_name,
-            )
+            inputs = self._build_inputs(api_name, handle_file(img_path), args)
+            job = self._model.submit(*inputs, api_name=api_name)
             deadline = time.time() + float(self._cfg.get("timeout_s", 900))
             while not job.done():
                 if cancel_event is not None and cancel_event.is_set():
@@ -175,6 +182,33 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
                 "vyčerpaná denní ZeroGPU kvóta, limit délky GPU úlohy, nebo změněné API.\n"
                 f"Space: {self._cfg.get('space_id')}\nPůvodní chyba: {exc}"
             ) from exc
+
+    def _build_inputs(self, api_name, image, values: dict) -> list:
+        """Sestaví vstupy podle názvů parametrů z view_api (pořadí se může lišit od kódu Space)."""
+        values = dict(values)
+        values.update({"image": image, "caption": None,
+                       "mv_image_front": None, "mv_image_back": None,
+                       "mv_image_left": None, "mv_image_right": None})
+        params = (self._api_info.get("named_endpoints", {}).get(api_name, {}) or {}).get("parameters", [])
+        if not params:
+            # fallback: caption je gr.State, v API chybí -> začínáme obrázkem
+            return [image, None, None, None, None,
+                    values["steps"], values["guidance_scale"], values["seed"],
+                    values["octree_resolution"], values["check_box_rembg"],
+                    values["num_chunks"], values["randomize_seed"]]
+        out, image_used = [], False
+        for p in params:
+            name = p.get("parameter_name") or p.get("label") or ""
+            if name in values:
+                out.append(values[name])
+                image_used = image_used or name == "image"
+            elif not image_used and "Image" in str(p.get("component", "")):
+                out.append(image)
+                image_used = True
+            else:
+                out.append(p.get("parameter_default"))
+        print(f"[Hunyuan3D21Cloud] {api_name} parametry: {[p.get('parameter_name') for p in params]}")
+        return out
 
     @staticmethod
     def _find_endpoint(client, fn_name: str) -> str:
