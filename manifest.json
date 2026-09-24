@@ -2,7 +2,7 @@
   "id": "hunyuan3d21-cloud",
   "name": "Hunyuan3D 2.1 Cloud (HF Space)",
   "type": "model",
-  "source": "https://github.com/YOUR_GITHUB/modly-hunyuan3d21-cloud",
+  "source": "https://github.com/PAYCSHARP/modly-hunyuan3d21-cloud",
   "description": "Hunyuan3D 2.1 s PBR texturami. Nepočítá lokálně – posílá fotku do Hugging Face Space (ZeroGPU).",
   "version": "0.1.0",
   "author": "Ladislav",
