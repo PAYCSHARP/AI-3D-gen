@@ -1,8 +1,13 @@
 {
   "space_id": "tencent/Hunyuan3D-2.1",
-  "texture_space_id": "PAYCSHARP/Hunyuan3D-2.1",
   "hf_token": "",
   "remove_background": true,
   "timeout_s": 900,
-  "mode": "auto"
+  "texture_provider": "meshy",
+  "meshy_api_key": "",
+  "meshy_ai_model": "latest",
+  "meshy_texture_resolution": "2k",
+  "meshy_enable_pbr": true,
+  "meshy_enable_original_uv": false,
+  "meshy_timeout_s": 600
 }
