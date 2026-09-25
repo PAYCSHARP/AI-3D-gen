@@ -144,6 +144,7 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
             "randomize_seed": randomize,
         }
         provider = str(self._cfg.get("texture_provider", "meshy")).lower()
+        existing_mesh = str(params.get("existing_mesh_path", "")).strip()
 
         self._report(progress_cb, 3, "Připravuji obrázek…")
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
@@ -159,7 +160,21 @@ class Hunyuan3D21CloudGenerator(BaseGenerator):
             ).start()
 
         try:
-            if provider == "hf":
+            # --- Import vlastního modelu: přeskočí se krok "tvar" ---
+            if existing_mesh:
+                if not os.path.isfile(existing_mesh):
+                    raise RuntimeError(f"existing_mesh_path neexistuje: {existing_mesh}")
+                self._report(progress_cb, 30, "Nahrávám vlastní model…")
+                if provider == "meshy":
+                    try:
+                        glb = self._meshy_retexture(existing_mesh, tmp.name, progress_cb, cancel_event)
+                    except Exception as exc:
+                        print(f"[Hunyuan3D21Cloud] Meshy retexture selhalo: {exc}")
+                        raise RuntimeError(f"Obarvení importovaného modelu selhalo: {exc}") from exc
+                else:
+                    # bez texturovacího poskytovatele vrať model beze změny
+                    glb = existing_mesh
+            elif provider == "hf":
                 try:
                     inputs = self._build_inputs(self._api_textured, handle_file(tmp.name), values)
                     glb = self._pick_glb(self._run_job(self._api_textured, inputs, cancel_event))
