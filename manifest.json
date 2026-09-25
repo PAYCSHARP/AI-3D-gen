@@ -16,6 +16,13 @@
       "output": "mesh",
       "params_schema": [
         {
+          "id": "existing_mesh_path",
+          "label": "Import modelu (volitelné)",
+          "type": "string",
+          "default": "",
+          "tooltip": "Cesta k .glb/.obj/.stl modelu na disku. Když vyplníš, tvar se přeskočí a rovnou se obarví tenhle model."
+        }
+        {
           "id": "num_inference_steps",
           "label": "Quality",
           "type": "select",
