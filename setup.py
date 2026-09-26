@@ -22,7 +22,7 @@ def setup(python_exe: str, ext_dir: Path, **_ignored) -> None:
     subprocess.run([python_exe, "-m", "venv", str(venv)], check=True)
     print("[setup] Installing dependencies …")
     run_pip(venv, "install", "gradio_client", "huggingface_hub",
-            "Pillow", "numpy", "trimesh", "requests")
+            "Pillow", "numpy", "trimesh")
     print("[setup] Done. Venv ready at:", venv)
 
 
